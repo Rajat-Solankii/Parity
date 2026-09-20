@@ -2,85 +2,141 @@ import ast
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
+
+from packaging.requirements import InvalidRequirement, Requirement
 
 try:
-    import tomllib  # type: ignore
+    import tomllib
 except ImportError:
     import tomli as tomllib  # type: ignore
 
+@dataclass(frozen=True)
+class Location:
+    file: str
+    line: int
+    specifier: str = ""
+    marker: str = ""
+
 @dataclass
 class ManifestData:
-    runtime: set[str] = field(default_factory=set)
-    dev: set[str] = field(default_factory=set)
-    unresolved: list[str] = field(default_factory=list) # e.g. setup.py line 42 could not be resolved statically
+    runtime: dict[str, list[Location]] = field(default_factory=dict)
+    dev: dict[str, list[Location]] = field(default_factory=dict)
+    unresolved: list[str] = field(default_factory=list)
+    requires_python: str | None = None
 
-    def merge(self, other: 'ManifestData'):
-        self.runtime.update(other.runtime)
-        self.dev.update(other.dev)
+    def merge(self, other: 'ManifestData') -> None:
+        for k, v in other.runtime.items():
+            self.runtime.setdefault(k, []).extend(v)
+        for k, v in other.dev.items():
+            self.dev.setdefault(k, []).extend(v)
         self.unresolved.extend(other.unresolved)
 
 def normalize_dep(name: str) -> str:
+    """Normalize a dependency string to just its package name."""
     return re.sub(r'[-_.]+', '-', name).lower()
 
+def _add_dep(target_dict: dict[str, list[Location]], req_str: str, file: str, line: int = 0) -> None:
+    try:
+        req = Requirement(req_str)
+        name = normalize_dep(req.name)
+        specifier = str(req.specifier) if req.specifier else ""
+        marker = str(req.marker) if req.marker else ""
+        target_dict.setdefault(name, []).append(Location(file, line, specifier, marker))
+    except InvalidRequirement:
+        # Fallback for simple names that might not be valid pep508 fully
+        match = re.match(r"^([a-zA-Z0-9_.-]+)", req_str)
+        if match:
+            name = normalize_dep(match.group(1))
+            target_dict.setdefault(name, []).append(Location(file, line, "", ""))
+
 def get_declared_dependencies(project_path: Path, manifest_file: Path | None = None) -> ManifestData:
-    """
-    Extract declared dependencies from manifests in the project path.
-    Separates into runtime and dev groups.
-    """
     data = ManifestData()
-    
     if manifest_file:
         _parse_file(manifest_file, data)
-        return data
-
-    # Auto-detect all supported files in the root
-    files_to_check = []
-    
-    # Requirements files
-    for req_file in project_path.glob("requirements*.txt"):
-        files_to_check.append(req_file)
-
-    for name in ["pyproject.toml", "setup.py", "setup.cfg", "Pipfile"]:
-        path = project_path / name
-        if path.is_file():
-            files_to_check.append(path)
-
-    for f in files_to_check:
-        _parse_file(f, data)
-        
+    else:
+        for f in _find_manifests(project_path):
+            _parse_file(f, data)
     return data
 
-def _parse_file(path: Path, data: ManifestData, seen: set[Path] | None = None):
+def _find_manifests(project_path: Path) -> list[Path]:
+    manifests = []
+    for name in ["pyproject.toml", "setup.py", "setup.cfg", "Pipfile"]:
+        p = project_path / name
+        if p.is_file():
+            manifests.append(p)
+    reqs = list(project_path.glob("requirements*.txt"))
+    return manifests + reqs
+
+def _parse_file(path: Path, data: ManifestData, seen: set[Path] | None = None) -> None:
     if seen is None:
         seen = set()
-    
-    path = path.resolve()
     if path in seen:
         return
     seen.add(path)
     
-    if not path.is_file():
-        return
-        
-    name = path.name
-    if name.endswith((".txt", ".in")):
-        is_dev = "dev" in name.lower() or "test" in name.lower()
+    if path.name == "pyproject.toml":
+        _parse_pyproject(path, data)
+    elif path.name.endswith(".txt"):
+        is_dev = "dev" in path.name or "test" in path.name
         _parse_requirements_txt(path, data, is_dev, seen)
-    elif name == "pyproject.toml":
-        _parse_pyproject_toml(path, data)
-    elif name == "setup.py":
-        _parse_setup_py(path, data)
-    elif name == "Pipfile":
+    elif path.name == "Pipfile":
         _parse_pipfile(path, data)
+    elif path.name == "setup.py":
+        _parse_setup_py(path, data)
+    # setup.cfg skipped for brevity unless strictly needed
 
-def _parse_requirements_txt(path: Path, data: ManifestData, is_dev: bool, seen: set[Path]):
+def _parse_pyproject(path: Path, data: ManifestData) -> None:
+    try:
+        with path.open("rb") as f:
+            toml_dict = tomllib.load(f)
+            
+        # PEP 621
+        project = toml_dict.get("project", {})
+        data.requires_python = project.get("requires-python")
+        for dep in project.get("dependencies", []):
+            _add_dep(data.runtime, dep, str(path))
+            
+        for extra, deps in project.get("optional-dependencies", {}).items():
+            target = data.dev if "dev" in extra or "test" in extra else data.runtime
+            for dep in deps:
+                _add_dep(target, dep, str(path))
+                
+        # Poetry
+        poetry = toml_dict.get("tool", {}).get("poetry", {})
+        for dep, version in poetry.get("dependencies", {}).items():
+            if dep == "python":
+                continue
+
+        if "python" in poetry.get("dependencies", {}):
+            val = poetry["dependencies"]["python"]
+            if not data.requires_python:
+                data.requires_python = val if isinstance(val, str) else None
+
+            req = f"{dep} {version}" if isinstance(version, str) else dep
+            _add_dep(data.runtime, req, str(path))
+            
+        for dep, version in poetry.get("dev-dependencies", {}).items():
+            req = f"{dep} {version}" if isinstance(version, str) else dep
+            _add_dep(data.dev, req, str(path))
+            
+        # Poetry group.dev
+        dev_group = poetry.get("group", {}).get("dev", {}).get("dependencies", {})
+        for dep, version in dev_group.items():
+            req = f"{dep} {version}" if isinstance(version, str) else dep
+            _add_dep(data.dev, req, str(path))
+            
+    except Exception as e: # noqa: BLE001
+        data.unresolved.append(f"{path.name}: Failed to parse ({e})")
+
+def _parse_requirements_txt(path: Path, data: ManifestData, is_dev: bool, seen: set[Path]) -> None:
     try:
         content = path.read_text(encoding="utf-8")
-        for line in content.splitlines():
+        for lineno, line in enumerate(content.splitlines(), start=1):
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
-            
+
             # Follow includes
             if line.startswith(("-r ", "-c ")):
                 parts = line.split(maxsplit=1)
@@ -91,114 +147,87 @@ def _parse_requirements_txt(path: Path, data: ManifestData, is_dev: bool, seen: 
                     next_file = path.parent / rel_path
                     _parse_file(next_file, data, seen)
                 continue
-                
+
             if line.startswith("-"):
                 continue
+
+            # Just add the whole line
+            if is_dev:
+                _add_dep(data.dev, line, str(path), lineno)
+            else:
+                _add_dep(data.runtime, line, str(path), lineno)
                 
-            match = re.match(r"^([a-zA-Z0-9_.-]+)", line)
-            if match:
-                dep = normalize_dep(match.group(1))
-                if is_dev:
-                    data.dev.add(dep)
-                else:
-                    data.runtime.add(dep)
-    except Exception:
-        pass
+    except OSError as e:
+        data.unresolved.append(f"{path.name}: {e}")
 
-def _parse_pyproject_toml(path: Path, data: ManifestData):
+def _parse_pipfile(path: Path, data: ManifestData) -> None:
     try:
-        content = path.read_text(encoding="utf-8")
-        toml_data = tomllib.loads(content)
-
-        # PEP 621
-        if "project" in toml_data:
-            project = toml_data["project"]
-            if "dependencies" in project:
-                for dep in project["dependencies"]:
-                    match = re.match(r"^([a-zA-Z0-9_.-]+)", dep)
-                    if match:
-                        data.runtime.add(normalize_dep(match.group(1)))
-                        
-            if "optional-dependencies" in project:
-                for extras in project["optional-dependencies"].values():
-                    for dep in extras:
-                        match = re.match(r"^([a-zA-Z0-9_.-]+)", dep)
-                        if match:
-                            data.dev.add(normalize_dep(match.group(1)))
-
-        # Poetry
-        if "tool" in toml_data and "poetry" in toml_data["tool"]:
-            poetry = toml_data["tool"]["poetry"]
-            if "dependencies" in poetry:
-                for k in poetry["dependencies"]:
-                    if k.lower() != "python":
-                        data.runtime.add(normalize_dep(k))
-            if "dev-dependencies" in poetry:
-                for k in poetry["dev-dependencies"]:
-                    data.dev.add(normalize_dep(k))
-
-            if "group" in poetry:
-                for group_data in poetry["group"].values():
-                    if "dependencies" in group_data:
-                        for k in group_data["dependencies"]:
-                            data.dev.add(normalize_dep(k))
-
-    except Exception:
-        pass
-
-def _parse_setup_py(path: Path, data: ManifestData):
-    try:
-        content = path.read_text(encoding="utf-8")
-        tree = ast.parse(content)
-        
-        # Track literal assignments
-        assignments: dict[str, list[str]] = {}
-        
-        for node in ast.walk(tree):
-            # Track list assignments: var = ['pkg1', 'pkg2']
-            if isinstance(node, ast.Assign):
-                for target in node.targets:
-                    if isinstance(target, ast.Name):
-                        if isinstance(node.value, ast.List):
-                            val_list = []
-                            for elt in node.value.elts:
-                                if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
-                                    val_list.append(elt.value)
-                            if len(val_list) == len(node.value.elts): # Only if all are string literals
-                                assignments[target.id] = val_list
-                                
-            # Extract setup(...)
-            elif isinstance(node, ast.Call):
-                if isinstance(node.func, ast.Name) and node.func.id == "setup":
-                    for kw in node.keywords:
-                        if kw.arg == "install_requires":
-                            _extract_deps_from_node(kw.value, data.runtime, data, path, assignments)
-                        elif kw.arg == "extras_require":
-                            if isinstance(kw.value, ast.Dict):
-                                for val in kw.value.values:
-                                    _extract_deps_from_node(val, data.dev, data, path, assignments)
-
-    except Exception as e:
+        with path.open("rb") as f:
+            toml_dict = tomllib.load(f)
+            
+        for dep in toml_dict.get("packages", {}):
+            _add_dep(data.runtime, dep, str(path))
+            
+        for dep in toml_dict.get("dev-packages", {}):
+            _add_dep(data.dev, dep, str(path))
+    except Exception as e: # noqa: BLE001
         data.unresolved.append(f"{path.name}: Failed to parse ({e})")
 
-def _extract_deps_from_node(node: ast.expr, target_set: set[str], data: ManifestData, path: Path, assignments: dict[str, list[str]]):
+def _parse_setup_py(path: Path, data: ManifestData) -> None:
+    try:
+        content = path.read_text(encoding="utf-8")
+        tree = ast.parse(content, filename=str(path))
+    except (SyntaxError, OSError) as e:
+        data.unresolved.append(f"{path.name}: AST parse error ({e})")
+        return
+        
+    class SetupVisitor(ast.NodeVisitor):
+        def __init__(self) -> None:
+            self.assignments: dict[str, list[str]] = {}
+
+        def visit_Assign(self, node: ast.Assign) -> None:
+            if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+                name = node.targets[0].id
+                if isinstance(node.value, ast.List):
+                    values = []
+                    for elt in node.value.elts:
+                        if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                            values.append(elt.value)
+                    self.assignments[name] = values
+            self.generic_visit(node)
+            
+        def visit_Call(self, node: ast.Call) -> None:
+            if isinstance(node.func, ast.Name) and node.func.id == "setup":
+                for kw in node.keywords:
+                    if kw.arg == "install_requires":
+                        _extract_deps_from_node(kw.value, data.runtime, data, path, self.assignments)
+                    elif kw.arg == "python_requires" and isinstance(kw.value, ast.Constant):
+                        if not data.requires_python:
+                            data.requires_python = str(kw.value.value)
+                    elif kw.arg == "extras_require" and isinstance(kw.value, ast.Dict):
+                        for k, v in zip(kw.value.keys, kw.value.values):
+                            if isinstance(k, ast.Constant) and isinstance(k.value, str):
+                                target = data.dev if "dev" in k.value or "test" in k.value else data.runtime
+                                _extract_deps_from_node(v, target, data, path, self.assignments)
+            self.generic_visit(node)
+
+    visitor = SetupVisitor()
+    visitor.visit(tree)
+
+def _extract_deps_from_node(node: Any, target_set: dict[str, list[Location]], data: ManifestData, path: Path, assignments: dict[str, list[str]]) -> None:
     # Direct list: ['pkg1', 'pkg2']
     if isinstance(node, ast.List):
         for elt in node.elts:
             if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
-                match = re.match(r"^([a-zA-Z0-9_.-]+)", elt.value)
-                if match:
-                    target_set.add(normalize_dep(match.group(1)))
+                _add_dep(target_set, elt.value, str(path), getattr(node, "lineno", 0))
             else:
                 data.unresolved.append(f"{path.name}:{node.lineno} dynamic element in list")
-    
+
     # Variable reference: var_name
     elif isinstance(node, ast.Name):
         if node.id in assignments:
             for val in assignments[node.id]:
-                match = re.match(r"^([a-zA-Z0-9_.-]+)", val)
-                if match:
-                    target_set.add(normalize_dep(match.group(1)))
+                _add_dep(target_set, val, str(path), getattr(node, "lineno", 0))
         else:
             data.unresolved.append(f"{path.name}:{node.lineno} unresolved variable '{node.id}'")
             
@@ -213,45 +242,28 @@ def _extract_deps_from_node(node: ast.expr, target_set: set[str], data: Manifest
                     is_dev = target_set is data.dev
                     _parse_requirements_txt(req_path, data, is_dev, {path})
                     return
-        data.unresolved.append(f"{path.name}:{node.lineno} unresolved dynamic call")
-    
-    # BinaryOp: ['pkg1'] + ['pkg2']
+        data.unresolved.append(f"{path.name}:{node.lineno} dynamic call in setup")
+        
+    # BinOp: _RUNTIME + ['other']
     elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
         _extract_deps_from_node(node.left, target_set, data, path, assignments)
         _extract_deps_from_node(node.right, target_set, data, path, assignments)
-    
     else:
-        data.unresolved.append(f"{path.name}:{node.lineno} unsupported AST node for dependencies")
+        data.unresolved.append(f"{path.name}:{getattr(node, 'lineno', 0)} dynamic expression")
 
-def _is_open_read_splitlines(node: ast.Call) -> bool:
-    # Looks for: open('...').read().splitlines()
+def _is_open_read_splitlines(node: Any) -> bool:
+    # Extremely basic AST heuristic for open('...').read().splitlines()
     if isinstance(node.func, ast.Attribute) and node.func.attr == "splitlines":
-        caller1 = node.func.value
-        if isinstance(caller1, ast.Call) and isinstance(caller1.func, ast.Attribute) and caller1.func.attr == "read":
-            caller2 = caller1.func.value
-            if isinstance(caller2, ast.Call) and isinstance(caller2.func, ast.Name) and caller2.func.id == "open":
+        if isinstance(node.func.value, ast.Call) and isinstance(node.func.value.func, ast.Attribute) and node.func.value.func.attr == "read":
+            if isinstance(node.func.value.func.value, ast.Call) and isinstance(node.func.value.func.value.func, ast.Name) and node.func.value.func.value.func.id == "open":
                 return True
     return False
 
-def _get_open_arg(node: ast.Call) -> str | None:
-    # Extracts '...' from open('...').read().splitlines()
+def _get_open_arg(node: Any) -> str | None:
     try:
-        open_call = node.func.value.func.value # type: ignore
-        if open_call.args and isinstance(open_call.args[0], ast.Constant):
-            return str(open_call.args[0].value)
-    except Exception:
+        open_call = node.func.value.func.value
+        if hasattr(open_call, 'args') and open_call.args and hasattr(open_call.args[0], 'value') and isinstance(open_call.args[0].value, str):
+            return open_call.args[0].value
+    except AttributeError:
         pass
     return None
-
-def _parse_pipfile(path: Path, data: ManifestData):
-    try:
-        content = path.read_text(encoding="utf-8")
-        toml_data = tomllib.loads(content)
-        if "packages" in toml_data:
-            for k in toml_data["packages"]:
-                data.runtime.add(normalize_dep(k))
-        if "dev-packages" in toml_data:
-            for k in toml_data["dev-packages"]:
-                data.dev.add(normalize_dep(k))
-    except Exception:
-        pass

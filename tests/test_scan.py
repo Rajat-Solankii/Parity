@@ -13,8 +13,8 @@ def test_manifest_requirements_includes():
         (path / "constraints.txt").write_text("flask<3.0\n", encoding="utf-8")
         
         data = get_declared_dependencies(path)
-        assert data.runtime == {"requests", "urllib3", "flask"}
-        assert data.dev == set()
+        assert set(data.runtime.keys()) == {"requests", "urllib3", "flask"}
+        assert set(data.dev.keys()) == set()
 
 def test_manifest_setup_py():
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -72,9 +72,9 @@ if TYPE_CHECKING:
         
         data = scan_directory_for_imports(path)
         
-        assert data.runtime == {"requests", "flask"}
-        assert data.dev == {"pytest", "httpx"}
-        assert data.optional == {"pandas", "numpy"}
+        assert set(data.runtime.keys()) == {"requests", "flask"}
+        assert set(data.dev.keys()) == {"pytest", "httpx"}
+        assert set(data.optional.keys()) == {"pandas", "numpy"}
 
 def test_ast_syntax_error():
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -84,4 +84,4 @@ def test_ast_syntax_error():
         data = scan_directory_for_imports(path)
         assert len(data.syntax_errors) == 1
         assert "bad.py" in data.syntax_errors[0]
-        assert "invalid code structure" in data.syntax_errors[0] or "typo" in data.syntax_errors[0]
+        assert "invalid syntax" in data.syntax_errors[0] or "typo" in data.syntax_errors[0]

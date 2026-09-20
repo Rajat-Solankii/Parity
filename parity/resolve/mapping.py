@@ -26,7 +26,9 @@ def _normalize(name: str) -> str:
     # PEP 503 normalization
     return re.sub(r"[-_.]+", "-", name).lower()
 
-def map_import_to_package(import_name: str, allow_online: bool = False, target_env_distributions: dict | None = None) -> Resolution:
+def map_import_to_package(
+    import_name: str, allow_online: bool = False, target_env_distributions: dict[str, str] | None = None
+) -> Resolution:
     """
     Resolve an import name to its possible PyPI distribution candidates.
     Uses a layered approach:
@@ -55,7 +57,7 @@ def map_import_to_package(import_name: str, allow_online: bool = False, target_e
                     Candidate(distribution=d, layer="BundledMapping", confidence=ConfidenceEnum.MEDIUM)
                     for d in data["mapping"][import_name]
                 ])
-        except Exception:
+        except Exception: # noqa: BLE001, S110 (Safe fallback)
             pass
 
     # Layer 4: Online lookup (disabled by default)
@@ -87,15 +89,14 @@ def _lookup_online(import_name: str) -> list[str] | None:
             if response.status != 200:
                 return None
             data = json.loads(response.read().decode('utf-8'))
-    except Exception:
+    except Exception: # noqa: BLE001 (Safe fallback)
         return None
         
     # 2. Find a suitable wheel
     wheel_url = None
     wheel_hash = None
     for release in data.get("urls", []):
-        if release["packagetype"] == "bdist_wheel" and release["size"] < 20_000_000:
-            if release["url"].startswith("https://files.pythonhosted.org/"):
+        if release["packagetype"] == "bdist_wheel" and release["size"] < 20_000_000 and release["url"].startswith("https://files.pythonhosted.org/"):
                 wheel_url = release["url"]
                 wheel_hash = release["digests"].get("sha256")
                 break
@@ -123,7 +124,7 @@ def _lookup_online(import_name: str) -> list[str] | None:
                     return None
                     
                 cached_wheel.write_bytes(content)
-        except Exception:
+        except Exception: # noqa: BLE001 (Safe fallback)
             return None
 
     # 5. Inspect wheel (RECORD or top_level.txt)
@@ -150,7 +151,7 @@ def _lookup_online(import_name: str) -> list[str] | None:
                     if path.startswith((f"{import_name}.py", f"{import_name}/")):
                         return [data["info"]["name"]]
                         
-    except Exception:
+    except Exception: # noqa: BLE001, S110 (Safe fallback)
         pass
         
     return None

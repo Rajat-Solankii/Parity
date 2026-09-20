@@ -2,46 +2,56 @@ import ast
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-
-import pathspec
+from typing import Any
 
 
 @dataclass
+@dataclass(frozen=True)
+class Location:
+    file: str
+    line: int
+
+@dataclass
 class ImportData:
-    runtime: set[str] = field(default_factory=set)
-    dev: set[str] = field(default_factory=set)
-    optional: set[str] = field(default_factory=set)
+    runtime: dict[str, list[Location]] = field(default_factory=dict)
+    dev: dict[str, list[Location]] = field(default_factory=dict)
+    optional: dict[str, list[Location]] = field(default_factory=dict)
     syntax_errors: list[str] = field(default_factory=list)
 
-    def merge(self, other: 'ImportData'):
-        self.runtime.update(other.runtime)
-        self.dev.update(other.dev)
-        self.optional.update(other.optional)
+    def merge(self, other: 'ImportData') -> None:
+        for k, v in other.runtime.items():
+            self.runtime.setdefault(k, []).extend(v)
+        for k, v in other.dev.items():
+            self.dev.setdefault(k, []).extend(v)
+        for k, v in other.optional.items():
+            self.optional.setdefault(k, []).extend(v)
         self.syntax_errors.extend(other.syntax_errors)
 
-def scan_directory_for_imports(project_path: Path) -> ImportData:
+def scan_directory_for_imports(directory: Path, data: ImportData | None = None) -> ImportData:
     """
     Recursively scan all Python files in the directory for imported modules.
     Ignores stdlib, first-party modules, and excluded directories.
     Tags imports as runtime, dev, or optional.
     """
-    data = ImportData()
-    project_path = project_path.resolve()
+    if data is None:
+        data = ImportData()
+    project_path = directory.resolve()
     
     ignore_dirs = {
         ".git", ".hg", ".tox", ".nox", "node_modules",
         "__pycache__", "build", "dist", ".mypy_cache", ".pytest_cache", ".ruff_cache"
     }
 
-    # Build pathspec from .gitignore if present
+    #def _build_pathspec_from_defaults(root: Path) -> 'pathspec.PathSpec':if present
     gitignore_path = project_path / ".gitignore"
     gitignore_spec = None
     if gitignore_path.is_file():
         try:
             lines = gitignore_path.read_text(encoding="utf-8").splitlines()
-            gitignore_spec = pathspec.PathSpec.from_lines(pathspec.patterns.GitWildMatchPattern, lines)
-        except Exception:
-            pass
+            import pathspec.patterns
+            gitignore_spec = pathspec.PathSpec.from_lines(pathspec.patterns.GitWildMatchPattern, lines) # type: ignore
+        except (OSError, ValueError) as e:
+            data.syntax_errors.append(f"{gitignore_path.name}: Failed to parse ({e})")
 
     # Discover first-party top-level modules
     first_party = _discover_first_party(project_path)
@@ -88,7 +98,7 @@ def _is_dev_file(py_file: Path, project_path: Path) -> bool:
         pass
     return False
 
-def _walk_python_files(directory: Path, ignore_dirs: set[str], spec: pathspec.PathSpec | None, root: Path):
+def _walk_python_files(directory: Path, ignore_dirs: set[str], spec: Any, root: Path) -> Any:
     try:
         for item in directory.iterdir():
             if item.name.endswith(".egg-info"):
@@ -116,13 +126,13 @@ def _walk_python_files(directory: Path, ignore_dirs: set[str], spec: pathspec.Pa
         pass
 
 class ImportVisitor(ast.NodeVisitor):
-    def __init__(self):
-        self.imports = set()
-        self.optional_imports = set()
+    def __init__(self) -> None:
+        self.imports: list[tuple[str, int]] = []
+        self.optional_imports: list[tuple[str, int]] = []
         self._in_try_except = False
         self._in_type_checking = False
         
-    def visit_Try(self, node: ast.Try):
+    def visit_Try(self, node: ast.Try) -> None:
         # We assume if it's in a try, and handles ImportError or Exception, it might be optional
         has_import_error = False
         for handler in node.handlers:
@@ -140,7 +150,7 @@ class ImportVisitor(ast.NodeVisitor):
         self.generic_visit(node)
         self._in_try_except = prev
 
-    def visit_If(self, node: ast.If):
+    def visit_If(self, node: ast.If) -> None:
         # Check if TYPE_CHECKING
         is_tc = False
         if isinstance(node.test, ast.Name) and node.test.id == "TYPE_CHECKING" or isinstance(node.test, ast.Attribute) and node.test.attr == "TYPE_CHECKING":
@@ -153,23 +163,23 @@ class ImportVisitor(ast.NodeVisitor):
         self.generic_visit(node)
         self._in_type_checking = prev
 
-    def visit_Import(self, node: ast.Import):
+    def visit_Import(self, node: ast.Import) -> None:
         for alias in node.names:
             base_module = alias.name.split(".")[0]
-            self._add_import(base_module)
+            self._add_import(base_module, node.lineno)
         self.generic_visit(node)
 
-    def visit_ImportFrom(self, node: ast.ImportFrom):
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
         if node.module and node.level == 0:
             base_module = node.module.split(".")[0]
-            self._add_import(base_module)
+            self._add_import(base_module, node.lineno)
         self.generic_visit(node)
         
-    def _add_import(self, base_module: str):
+    def _add_import(self, base_module: str, lineno: int) -> None:
         if self._in_try_except or self._in_type_checking:
-            self.optional_imports.add(base_module)
+            self.optional_imports.append((base_module, lineno))
         else:
-            self.imports.add(base_module)
+            self.imports.append((base_module, lineno))
 
 def _simplify_syntax_error(e: SyntaxError) -> str:
     msg = str(e.msg).lower()
@@ -185,7 +195,7 @@ def _simplify_syntax_error(e: SyntaxError) -> str:
         return "You forgot to close a string quote."
     return "There's a syntax error that prevents Python from reading the file."
 
-def _scan_file(py_file: Path, data: ImportData, is_dev: bool, first_party: set[str], stdlib: set[str]):
+def _scan_file(py_file: Path, data: ImportData, is_dev_file: bool, first_party: set[str], stdlib: set[str]) -> None:
     try:
         content = py_file.read_text(encoding="utf-8")
         tree = ast.parse(content, filename=str(py_file))
@@ -194,25 +204,26 @@ def _scan_file(py_file: Path, data: ImportData, is_dev: bool, first_party: set[s
         visitor.visit(tree)
         
         # Filter and categorize
-        for imp in visitor.imports:
+        file_name = str(py_file)
+        for imp, lineno in visitor.imports:
             if imp in stdlib or imp in first_party:
                 continue
-            if is_dev:
-                data.dev.add(imp)
+            loc = Location(file_name, lineno)
+            if is_dev_file:
+                data.dev.setdefault(imp, []).append(loc)
             else:
-                data.runtime.add(imp)
+                data.runtime.setdefault(imp, []).append(loc)
                 
-        for imp in visitor.optional_imports:
+        for imp, lineno in visitor.optional_imports:
             if imp in stdlib or imp in first_party:
                 continue
-            data.optional.add(imp)
+            loc = Location(file_name, lineno)
+            data.optional.setdefault(imp, []).append(loc)
             
-    except SyntaxError as e:
-        simple_msg = _simplify_syntax_error(e)
-        line = e.lineno or "unknown"
+    except (SyntaxError, ValueError) as e:
+        simple_msg = str(e).splitlines()[0] if str(e) else "Syntax Error"
+        line = getattr(e, 'lineno', "unknown")
         data.syntax_errors.append(f"{py_file.name} (line {line}): {simple_msg}")
-    except Exception:
-        pass
 
 def _get_fallback_stdlib() -> set[str]:
     return {"os", "sys", "re", "math", "json", "ast", "pathlib", "typing", "subprocess", "logging", "argparse", "datetime", "collections"}

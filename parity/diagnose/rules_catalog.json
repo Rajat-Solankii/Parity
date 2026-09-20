@@ -1,0 +1,27 @@
+{
+  "R1": {
+    "title": "Undeclared Import",
+    "default_severity": "high",
+    "explanation_template": "The package '{package}' is imported but not declared in any dependency manifest."
+  },
+  "R2": {
+    "title": "Missing or Mismatched Dependency",
+    "default_severity": "high",
+    "explanation_template": "The package '{package}' is declared with specifier '{specifier}' but {installed_version}."
+  },
+  "R3": {
+    "title": "Conflicting Pins",
+    "default_severity": "medium",
+    "explanation_template": "Conflicting requirements for '{package}': {conflict_detail}."
+  },
+  "R4": {
+    "title": "Python Incompatibility",
+    "default_severity": "high",
+    "explanation_template": "Python version incompatibility: {conflict_detail}."
+  },
+  "R7": {
+    "title": "Marker Evaluation",
+    "default_severity": "low",
+    "explanation_template": "The requirement '{package}' was evaluated against marker '{marker}'."
+  }
+}

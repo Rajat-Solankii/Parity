@@ -1,0 +1,3 @@
+[project]
+name = "b4"
+dependencies = ["requests==2.31.0", "requests==2.20.0"]

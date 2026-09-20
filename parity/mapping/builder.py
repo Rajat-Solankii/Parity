@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 
-def build_mapping(online: bool = False):
+def build_mapping(online: bool = False, max_pkgs: int = 1000) -> None:
     """
     Build the import-to-distribution mapping file.
     In a real implementation, if online is True, this would download wheels.

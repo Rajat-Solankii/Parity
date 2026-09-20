@@ -118,7 +118,7 @@ def test_vswhere_parsing(mock_run):
         MagicMock(stdout="16.0", returncode=0), # version
         MagicMock(stdout="C:\\VS", returncode=0)  # path
     ]
-    res = _detect_msvc(safe_env)
+    res = _detect_msvc(safe_env, {"command": "vswhere", "args": ["-latest", "-property", "installationVersion"]})
     assert res.status == ToolStatus.FOUND_NOT_ON_PATH
     assert res.version == "16.0"
     
@@ -128,7 +128,7 @@ def test_vswhere_parsing(mock_run):
         MagicMock(stdout="", returncode=0), # Requires fails
         MagicMock(stdout="16.0", returncode=0) # But VS exists
     ]
-    res = _detect_msvc(safe_env)
+    res = _detect_msvc(safe_env, {"command": "vswhere", "args": ["-latest", "-property", "installationVersion"]})
     assert res.status == ToolStatus.FOUND_INCOMPLETE
 
 def test_planted_executable_ignored(tmp_path):
@@ -174,8 +174,7 @@ def test_tempdirs_cleaned_up():
     import ast
     tree = ast.parse(content)
     for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-            if node.func.attr == "mkdtemp":
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "mkdtemp":
                 pytest.fail("mkdtemp found in fingerprint.py, use TemporaryDirectory instead")
 
 def test_fingerprint_determinism():
@@ -190,5 +189,78 @@ def test_fingerprint_determinism():
     del d2["timestamp"]
     
     assert json.dumps(d1, sort_keys=True) == json.dumps(d2, sort_keys=True)
+
+def test_missing_metadata(tmp_path):
+    from unittest.mock import patch
+
+    from parity.env.fingerprint import capture_environment
+    
+    class FakeDist:
+        def __init__(self, name, version, metadata):
+            self.version = version
+            self._metadata = metadata
+        
+        @property
+        def metadata(self):
+            return self._metadata
+            
+    # One valid, one missing Name
+    dists = [
+        FakeDist("good_pkg", "1.0", {"Name": "good_pkg"}),
+        FakeDist("bad_pkg", "1.0", {}) # No Name
+    ]
+    
+    with patch("importlib.metadata.distributions", return_value=dists):
+        env = capture_environment()
+        assert "good_pkg" in env.installed_packages
+        assert "bad_pkg" not in env.installed_packages
+
+def test_target_env_fallback_untrusted_output(tmp_path):
+    from unittest.mock import patch
+
+    from parity.env.fingerprint import _get_target_paths
+    
+    original_is_file = Path.is_file
+    def mock_is_file(self):
+        if self.name == "pyvenv.cfg":
+            return False
+        return original_is_file(self)
+        
+    class FakeProcess:
+        stdout = b'["/not/a/real/dir/123", "/another/fake/dir/456"]'
+        
+    with patch("pathlib.Path.is_file", mock_is_file), patch("subprocess.run", return_value=FakeProcess()):
+        paths = _get_target_paths("python")
+        # Ensure it filters out non-existent directories from the untrusted JSON
+        assert paths == []
+
+def test_symlink_mitigation(tmp_path):
+    from parity.env.fingerprint import _safe_which
+    
+    # Create a project dir
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    
+    # Create a legitimate exe outside
+    system_dir = tmp_path / "system"
+    system_dir.mkdir()
+    real_exe = system_dir / "tool.exe"
+    real_exe.write_text("bin")
+    
+    # Create a symlink inside the project pointing to it
+    symlink_exe = project_dir / "tool.exe"
+    try:
+        os.symlink(real_exe, symlink_exe)
+    except OSError:
+        pytest.skip("Symlinks not supported on this OS")
+        
+    env = os.environ.copy()
+    env["PATH"] = f"{project_dir}{os.pathsep}{system_dir}"
+    
+    os.chdir(project_dir)
+    found = _safe_which("tool", env)
+    
+    # Should resolve to the system one, rejecting the one inside project_dir
+    assert found == str(real_exe)
 
 

@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
-from typing import Dict
+from typing import Any
 
 import packaging.tags
 
@@ -50,7 +50,7 @@ class EnvFingerprint:
     user_site_packages: dict[str, str] = field(default_factory=dict)
     native_tools: dict[str, ToolFingerprint] = field(default_factory=dict)
 
-def _safe_which(cmd: str, env: dict) -> str | None:
+def _safe_which(cmd: str, env: dict[str, str]) -> str | None:
     """Safe Windows alternative to shutil.which that avoids the current directory."""
     if platform.system() != "Windows":
         return shutil.which(cmd, path=env.get("PATH"))
@@ -65,7 +65,7 @@ def _safe_which(cmd: str, env: dict) -> str | None:
     try:
         # Heuristically avoid anything in the current site-packages too if needed, but cwd is main issue
         pass
-    except Exception:
+    except Exception: # noqa: BLE001, S110 (Path check failsafe)
         pass
 
     for p in paths:
@@ -75,7 +75,7 @@ def _safe_which(cmd: str, env: dict) -> str | None:
         try:
             if any(dir_path == fd or fd in dir_path.parents for fd in forbidden_dirs):
                 continue
-        except Exception:
+        except Exception: # noqa: BLE001, S110 (Path check failsafe)
             pass
             
         for ext in [""] + pathext:
@@ -114,7 +114,7 @@ def _get_target_paths(target_python: str) -> list[str]:
             result = subprocess.run(
                 [target_python, "-S", "-I", "-c", 
                  "import sysconfig, json; p = sysconfig.get_paths(); print(json.dumps([p['purelib'], p['platlib']]))"],
-                cwd=tmpdir, shell=False, timeout=10, capture_output=True, text=True
+                capture_output=True, text=True, timeout=10, shell=False, cwd=tmpdir, check=False
             )
             if result.returncode == 0:
                 raw = json.loads(result.stdout)
@@ -129,7 +129,7 @@ def _get_target_paths(target_python: str) -> list[str]:
                     return list(dict.fromkeys(valid_paths))  # deduplicate
             else:
                 print(f"Fallback subprocess failed: {result.stderr}")
-        except Exception as e:
+        except Exception as e: # noqa: BLE001 (Safe fallback)
             print(f"Warning: Failed to locate site-packages via fallback: {e}")
             return []
             
@@ -157,9 +157,9 @@ def _parse_pth_files(site_dirs: list[str]) -> list[str]:
                         try:
                             # Not strictly checking full env bound, but ensuring it resolves
                             extra_dirs.append(str(extra_path))
-                        except Exception:
+                        except Exception: # noqa: BLE001, S110 (Safe fallback)
                             pass
-            except Exception:
+            except Exception: # noqa: BLE001, S110 (Safe fallback)
                 pass
     return extra_dirs
 
@@ -170,17 +170,19 @@ def _get_user_site(target_python: str) -> list[str]:
             result = subprocess.run(
                 [target_python, "-S", "-c", 
                  "import site; print(site.USER_SITE)"],
-                cwd=tmpdir, shell=False, timeout=10, capture_output=True, text=True
+                capture_output=True, text=True, timeout=2, shell=False, cwd=tmpdir, check=False
             )
             if result.returncode == 0:
                 p = Path(result.stdout.strip())
                 if p.is_absolute() and p.is_dir():
                     return [str(p)]
-        except Exception:
+        except Exception: # noqa: BLE001, S110 (Safe fallback)
             pass
     return []
 
-def capture_environment(target_python: str | None = None, extra_tools: list[str] | None = None) -> EnvFingerprint:
+def capture_environment(
+    target_python: str | None = None, extra_tools: list[str] | None = None
+) -> EnvFingerprint:
     target_python = target_python or sys.executable
 
     target_paths = _get_target_paths(target_python)
@@ -190,28 +192,34 @@ def capture_environment(target_python: str | None = None, extra_tools: list[str]
     installed = {}
     if target_paths:
         for dist in importlib.metadata.distributions(path=target_paths):
-            name = dist.metadata["Name"]
-            if name:
-                installed[name] = dist.version
+            try:
+                name = dist.metadata["Name"]
+                if name:
+                    installed[name] = dist.version
+            except KeyError:
+                pass # skip distribution with missing/malformed metadata
 
     # Extract user site
-    user_site_pkgs: Dict[str, str] = {}
+    user_site_pkgs: dict[str, str] = {}
     user_site = _get_user_site(target_python)
     if user_site:
         for dist in importlib.metadata.distributions(path=user_site):
-            name = dist.metadata["Name"]
-            if name and name not in installed:
-                user_site_pkgs[name] = dist.version
+            try:
+                name = dist.metadata["Name"]
+                if name and name not in installed:
+                    user_site_pkgs[name] = dist.version
+            except KeyError:
+                pass
 
     # Get pip version and python version info (safe to execute target_python --version)
     with tempfile.TemporaryDirectory() as tmpdir:
         py_ver = "Unknown"
         try:
             res = subprocess.run([target_python, "-c", "import sys; print(sys.version.split(' ')[0])"], 
-                                 cwd=tmpdir, shell=False, capture_output=True, text=True, timeout=2)
+                                 cwd=tmpdir, shell=False, capture_output=True, text=True, timeout=2, check=False)
             if res.returncode == 0:
                 py_ver = res.stdout.strip()
-        except Exception:
+        except (subprocess.SubprocessError, FileNotFoundError, OSError):
             pass
             
         pip_ver = "Unknown"
@@ -222,10 +230,10 @@ def capture_environment(target_python: str | None = None, extra_tools: list[str]
     with tempfile.TemporaryDirectory() as tmpdir:
         try:
             res = subprocess.run([target_python, "-c", "import sys; print(sys.prefix != sys.base_prefix)"], 
-                                 cwd=tmpdir, shell=False, capture_output=True, text=True, timeout=2)
+                                 cwd=tmpdir, shell=False, capture_output=True, text=True, timeout=2, check=False)
             if res.returncode == 0:
                 is_venv = res.stdout.strip() == "True"
-        except Exception:
+        except (subprocess.SubprocessError, FileNotFoundError, OSError):
             pass
 
     tags = [str(t) for t in packaging.tags.sys_tags()]
@@ -267,7 +275,7 @@ def capture_environment(target_python: str | None = None, extra_tools: list[str]
                 raise ValueError(f"Invalid extended tool name: {tool}")
             tools_to_check.add(tool)
 
-    safe_env = os.environ.copy()
+    safe_env: dict[str, str] = os.environ.copy()
     # Clean PATH: remove empty and "."
     if "PATH" in safe_env:
         paths = [p for p in safe_env["PATH"].split(os.pathsep) if p and p != "."]
@@ -287,9 +295,9 @@ def capture_environment(target_python: str | None = None, extra_tools: list[str]
         
     return env
 
-def _detect_tool(tool_data: dict, safe_env: dict, is_extended: bool = False) -> ToolFingerprint:
+def _detect_tool(tool_data: dict[str, Any], safe_env: dict[str, str], is_extended: bool = False) -> ToolFingerprint:
     if "cl" in tool_data.get("executable_names", []) and platform.system() == "Windows" and not is_extended:
-        return _detect_msvc(safe_env)
+        return _detect_msvc(safe_env, tool_data)
 
     for exe_name in tool_data.get("executable_names", []):
         exe_path = _safe_which(exe_name, safe_env)
@@ -314,18 +322,13 @@ def _detect_tool(tool_data: dict, safe_env: dict, is_extended: bool = False) -> 
                     with tempfile.TemporaryDirectory() as tmpdir:
                         result = subprocess.run(
                             [exe_path] + tool_data.get("version_args", ["--version"]),
-                            capture_output=True,
-                            text=True,
-                            timeout=10,
-                            shell=False,
-                            cwd=tmpdir,
-                            env=safe_env
+                            capture_output=True, text=True, timeout=10, shell=False, cwd=tmpdir, env=safe_env, check=False
                         )
-                        output = result.stdout + "\n" + result.stderr
+                        output = result.stdout + result.stderr
                         match = re.search(tool_data.get("version_regex", r"([\d\.]+)"), output, re.IGNORECASE)
                         if match:
                             version = match.group(1)
-                except Exception:
+                except (subprocess.SubprocessError, FileNotFoundError, OSError):
                     pass
                 
             return ToolFingerprint(
@@ -337,7 +340,7 @@ def _detect_tool(tool_data: dict, safe_env: dict, is_extended: bool = False) -> 
             
     return ToolFingerprint(status=ToolStatus.NOT_FOUND, winget_id=tool_data.get("winget_id") if not is_extended else None)
 
-def _detect_msvc(safe_env: dict) -> ToolFingerprint:
+def _detect_msvc(safe_env: dict[str, str], tool_data: dict[str, Any]) -> ToolFingerprint:
     vswhere = Path(r"C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe")
     if not vswhere.exists():
         return ToolFingerprint(status=ToolStatus.NOT_FOUND)
@@ -346,26 +349,26 @@ def _detect_msvc(safe_env: dict) -> ToolFingerprint:
         with tempfile.TemporaryDirectory() as tmpdir:
             result = subprocess.run(
                 [str(vswhere), "-products", "*", "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64", "-property", "installationVersion"],
-                capture_output=True, text=True, timeout=10, shell=False, cwd=tmpdir, env=safe_env
+                capture_output=True, text=True, timeout=10, shell=False, cwd=tmpdir, env=safe_env, check=False
             )
             version = result.stdout.strip()
             
             if version:
                 path_result = subprocess.run(
                     [str(vswhere), "-products", "*", "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64", "-property", "installationPath"],
-                    capture_output=True, text=True, timeout=10, shell=False, cwd=tmpdir, env=safe_env
+                    capture_output=True, text=True, timeout=10, shell=False, cwd=tmpdir, env=safe_env, check=False
                 )
                 install_path = path_result.stdout.strip()
                 return ToolFingerprint(status=ToolStatus.FOUND_NOT_ON_PATH, path=install_path, version=version)
             else:
                 check_vs = subprocess.run(
                     [str(vswhere), "-products", "*", "-property", "installationVersion"],
-                    capture_output=True, text=True, timeout=10, shell=False, cwd=tmpdir, env=safe_env
+                    capture_output=True, text=True, timeout=10, shell=False, cwd=tmpdir, env=safe_env, check=False
                 )
                 if check_vs.stdout.strip():
                     return ToolFingerprint(status=ToolStatus.FOUND_INCOMPLETE, error_msg="VS installed without C++ workload")
                 
-    except Exception:
+    except Exception: # noqa: BLE001, S110 (Subprocess error for vswhere failsafe)
         pass
         
     return ToolFingerprint(status=ToolStatus.NOT_FOUND)

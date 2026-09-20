@@ -89,11 +89,27 @@ def mock_layer4(monkeypatch):
         
     monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen)
 
-def test_layer4_wheel_inspection(mock_layer4):
-    res = map_import_to_package("fake_pkg", allow_online=True)
-    # The hash check will fail because we hardcoded 'fakehash' and dynamically built the zip
-    # But it verifies the logic path is hit.
-    assert not any(c.layer == "OnlinePyPI" for c in res.candidates) # Fails due to SHA256 mismatch
+@pytest.mark.parametrize("mock_data", [
+    {"url": "https://files.pythonhosted.org/valid", "sha": "fakehash", "size": 100},
+    {"url": "https://evil.com/wheel.whl", "sha": "fakehash", "size": 100},
+    {"url": "https://files.pythonhosted.org/toolarge", "sha": "fakehash", "size": 1024 * 1024 * 10},
+])
+def test_layer4_wheel_inspection_parameterized(mock_layer4, mock_data):
+    from unittest.mock import patch
+
+    from parity.resolve.mapping import map_import_to_package
+    # mock URL return
+    def fake_get(*args, **kwargs):
+        if "evil.com" in args[0]:
+            raise ValueError("Should not request evil.com")
+        class R:
+            def json(self): return {"urls": [{"url": mock_data["url"], "digests": {"sha256": mock_data["sha"]}}]}
+            content = b"fakezip"
+        return R()
+    
+    with patch("urllib.request.urlopen", fake_get):
+        res = map_import_to_package("fake_pkg", allow_online=True)
+        assert not any(c.layer == "OnlinePyPI" for c in res.candidates)
 
 def test_mapping_builder_offline_deterministic(tmp_path):
     from unittest.mock import MagicMock, patch
@@ -108,6 +124,6 @@ def test_cli_resolve_explain():
     import subprocess
     import sys
     # parity module might not be executable, so use -m parity.cli or just call the python script
-    res = subprocess.run([sys.executable, "-m", "parity.cli", "resolve", "cv2", "--explain"], capture_output=True, text=True)
+    res = subprocess.run([sys.executable, "-m", "parity.cli", "resolve", "cv2", "--explain"], capture_output=True, text=True, check=False)
     assert "opencv-python" in res.stdout
     assert "BundledMapping" in res.stdout

@@ -1,11 +1,13 @@
 import argparse
-import sys
 import os
+import sys
 from pathlib import Path
 
 from rich.console import Console
 from rich.table import Table
 
+from parity.env.fingerprint import EnvFingerprint
+from parity.resolve.mapping import Resolution
 from parity.scan.ast_import import scan_directory_for_imports
 from parity.scan.manifest import get_declared_dependencies
 
@@ -118,7 +120,7 @@ def cmd_update_mapping(args: argparse.Namespace) -> None:
     if getattr(args, "online", False):
         cmd.append("--online")
         
-    subprocess.run(cmd)
+    subprocess.run(cmd, check=False)
     console.print("[green]Mapping updated successfully.[/green]")
 
 def cmd_resolve_test(args: argparse.Namespace) -> None:
@@ -143,8 +145,7 @@ def cmd_resolve_test(args: argparse.Namespace) -> None:
         dists = [c.distribution for c in res.candidates]
         console.print(f"Candidates: {', '.join(dists)}")
 
-def cmd_diagnose(args: argparse.Namespace) -> None:
-    console.print("Diagnose command: Not yet implemented.", style="yellow")
+
 
 def cmd_fix(args: argparse.Namespace) -> None:
     console.print("Fix command: Not yet implemented.", style="yellow")
@@ -154,6 +155,69 @@ def cmd_report(args: argparse.Namespace) -> None:
 
 def cmd_eval(args: argparse.Namespace) -> None:
     console.print("Eval command: Not yet implemented.", style="yellow")
+
+
+import dataclasses
+import json
+
+from parity.diagnose.engine import Diagnoser
+
+
+class ResolverAdapter:
+    def __init__(self, fingerprint: 'EnvFingerprint') -> None:
+        self.fingerprint = fingerprint
+    def map_import_to_package(self, import_name: str) -> 'Resolution':
+        return map_import_to_package(import_name, allow_online=False, target_env_distributions=None)
+
+def cmd_diagnose(args: argparse.Namespace) -> None:
+    from parity.scan.ast_import import scan_directory_for_imports
+    from parity.scan.manifest import get_declared_dependencies
+    
+    base_path = Path(args.path).resolve()
+    if not base_path.is_dir():
+        console.print(f"[red]Error:[/red] {base_path} is not a valid directory.")
+        sys.exit(2)
+
+    import_data = scan_directory_for_imports(base_path)
+    manifest_data = get_declared_dependencies(base_path)
+
+    if getattr(args, "against", None):
+        with open(args.against, "r") as f:
+            fp_data = json.load(f)
+            from parity.env.fingerprint import EnvFingerprint
+            fingerprint = EnvFingerprint(**fp_data)
+    else:
+        fingerprint = capture_environment(target_python=getattr(args, "python", None))
+
+    diagnoser = Diagnoser(manifest_data, import_data, fingerprint, ResolverAdapter(fingerprint))
+    findings = diagnoser.evaluate()
+
+    if getattr(args, "format", "text") == "json":
+        from typing import Any
+        class EnhancedJSONEncoder(json.JSONEncoder):
+            def default(self, o: Any) -> Any:
+                if dataclasses.is_dataclass(o) and not isinstance(o, type):
+                    return dataclasses.asdict(o)
+                from enum import Enum
+                if isinstance(o, Enum):
+                    return o.value
+                return super().default(o)
+        print(json.dumps(findings, cls=EnhancedJSONEncoder, indent=2))
+    else:
+        if not findings:
+            console.print("[green]No issues found![/green]")
+        else:
+            for finding in findings:
+                console.print(f"[{finding.severity.value.upper()}] {finding.rule_id}: {finding.title}")
+                console.print(f"  {finding.explanation}")
+                for ev in finding.evidence:
+                    console.print(f"  - {ev.kind}: {ev.file}:{ev.line}")
+                if finding.fix:
+                    console.print(f"  Fix ({'Auto' if finding.fix.auto else 'Manual'}): {finding.fix.kind.value} {finding.fix.target} {finding.fix.specifier}")
+                console.print()
+
+    sys.exit(1 if findings else 0)
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -190,8 +254,10 @@ def main() -> None:
 
     # diagnose
     parser_diag = subparsers.add_parser("diagnose", help="Findings + explanations")
-    parser_diag.add_argument("path", help="Path to the project directory")
-    parser_diag.add_argument("--against", help="Environment fingerprint to compare against")
+    parser_diag.add_argument("path", default=".", nargs="?", help="Project path to diagnose")
+    parser_diag.add_argument("--python", help="Target python environment to check against")
+    parser_diag.add_argument("--against", help="Diagnose against a saved fingerprint JSON file")
+    parser_diag.add_argument("--format", choices=["text", "json"], default="text", help="Output format")
     parser_diag.set_defaults(func=cmd_diagnose)
 
     # fix
