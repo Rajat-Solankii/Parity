@@ -1,0 +1,52 @@
+{
+  "tools": {
+    "git": {
+      "executable_names": ["git"],
+      "common_paths_windows": ["%ProgramFiles%/Git/bin/git.exe", "%ProgramFiles%/Git/cmd/git.exe"],
+      "common_paths_posix": ["/usr/bin/git", "/usr/local/bin/git"],
+      "version_args": ["--version"],
+      "version_regex": "git version ([0-9\\.]+)",
+      "winget_id": "Git.Git"
+    },
+    "ffmpeg": {
+      "executable_names": ["ffmpeg"],
+      "common_paths_windows": [],
+      "common_paths_posix": ["/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg"],
+      "version_args": ["-version"],
+      "version_regex": "ffmpeg version ([\\w\\.-]+)",
+      "winget_id": "Gyan.FFmpeg"
+    },
+    "cmake": {
+      "executable_names": ["cmake"],
+      "common_paths_windows": ["%ProgramFiles%/CMake/bin/cmake.exe", "%ProgramFiles(x86)%/CMake/bin/cmake.exe"],
+      "common_paths_posix": ["/usr/bin/cmake", "/usr/local/bin/cmake"],
+      "version_args": ["--version"],
+      "version_regex": "cmake version ([0-9\\.]+)",
+      "winget_id": "Kitware.CMake"
+    },
+    "make": {
+      "executable_names": ["make", "mingw32-make"],
+      "common_paths_windows": [],
+      "common_paths_posix": ["/usr/bin/make"],
+      "version_args": ["--version"],
+      "version_regex": "GNU Make ([0-9\\.]+)",
+      "winget_id": "ezwinports.make"
+    },
+    "gcc": {
+      "executable_names": ["gcc"],
+      "common_paths_windows": [],
+      "common_paths_posix": ["/usr/bin/gcc"],
+      "version_args": ["--version"],
+      "version_regex": "gcc \\(.*?\\) ([0-9\\.]+)",
+      "winget_id": null
+    },
+    "docker": {
+      "executable_names": ["docker"],
+      "common_paths_windows": ["%ProgramFiles%/Docker/Docker/resources/bin/docker.exe"],
+      "common_paths_posix": ["/usr/bin/docker", "/usr/local/bin/docker"],
+      "version_args": ["--version"],
+      "version_regex": "Docker version ([0-9\\.]+)",
+      "winget_id": "Docker.DockerDesktop"
+    }
+  }
+}

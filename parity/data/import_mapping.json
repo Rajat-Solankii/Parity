@@ -1,0 +1,41 @@
+{
+  "_meta": {
+    "version": "1.0",
+    "generated_at": "2026-09-20T13:27:51.459215+00:00Z",
+    "source": "manual_fixture"
+  },
+  "mapping": {
+    "cv2": [
+      "opencv-python"
+    ],
+    "sklearn": [
+      "scikit-learn"
+    ],
+    "PIL": [
+      "Pillow"
+    ],
+    "yaml": [
+      "PyYAML"
+    ],
+    "bs4": [
+      "beautifulsoup4"
+    ],
+    "dateutil": [
+      "python-dateutil"
+    ],
+    "dotenv": [
+      "python-dotenv"
+    ],
+    "jwt": [
+      "PyJWT"
+    ],
+    "Crypto": [
+      "pycryptodome"
+    ],
+    "google": [
+      "google-api-python-client",
+      "google-auth",
+      "google-cloud-storage"
+    ]
+  }
+}
