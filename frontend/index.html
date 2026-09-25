@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Parity — Make every machine match. Diagnose and fix Python environment differences.">
+  <title>Parity — Environment Dashboard</title>
+  <link rel="stylesheet" href="index.css?v=12">
+</head>
+<body>
+
+<!-- Loading overlay -->
+<div id="loading-overlay" class="loading-overlay">
+  <div class="spinner"></div>
+  <p id="loading-text">Analyzing project…</p>
+</div>
+
+<!-- Toast container -->
+<div id="toast-container" class="toast-container"></div>
+
+<div class="app-layout">
+  <!-- ── Sidebar ── -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-brand">
+      <div class="logo">P</div>
+      <div>
+        <h1>Parity</h1>
+        <span class="version">v0.1.0</span>
+      </div>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-section-title">Analysis</div>
+      <button class="nav-item active" data-view="dashboard" id="nav-dashboard">
+        <span class="icon">📊</span> Dashboard
+      </button>
+      <button class="nav-item" data-view="findings" id="nav-findings">
+        <span class="icon">🔍</span> Findings
+        <span class="badge" id="findings-badge" style="display:none;">0</span>
+      </button>
+      <button class="nav-item" data-view="scan" id="nav-scan">
+        <span class="icon">📦</span> Scan
+      </button>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-section-title">Environment</div>
+      <button class="nav-item" data-view="fingerprint" id="nav-fingerprint">
+        <span class="icon">🖥️</span> Fingerprint
+      </button>
+      <button class="nav-item" data-view="tools" id="nav-tools">
+        <span class="icon">🔧</span> Native Tools
+      </button>
+      <button class="nav-item" data-view="packages" id="nav-packages">
+        <span class="icon">📚</span> Packages
+      </button>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-section-title">Utilities</div>
+      <button class="nav-item" data-view="resolve" id="nav-resolve">
+        <span class="icon">🔗</span> Resolve Import
+      </button>
+      <button class="nav-item" data-view="json-viewer" id="nav-json">
+        <span class="icon">{ }</span> Raw JSON
+      </button>
+    </div>
+
+    <!-- Spacer -->
+    <div style="flex:1;"></div>
+
+    <div class="sidebar-section" style="margin-bottom:0;">
+      <div class="sidebar-section-title">Project</div>
+      <div style="padding:0 var(--space-3);">
+        <div class="input-inline">
+          <input type="text" class="input w-full" id="project-path" placeholder="d:\my-project" value=".">
+          <button class="btn btn-secondary btn-icon" id="btn-browse" title="Browse folder">📁</button>
+          <button class="btn btn-primary btn-icon" id="btn-analyze" title="Analyze project">▶</button>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ── Header ── -->
+  <header class="header">
+    <div class="header-left">
+      <button class="btn btn-ghost btn-icon" id="btn-menu" style="display:none;">☰</button>
+      <h2 id="page-title">Dashboard</h2>
+      <div class="breadcrumb" id="breadcrumb">
+        <span>Analysis</span>
+        <span>/</span>
+        <span id="breadcrumb-current">Overview</span>
+      </div>
+    </div>
+    <div class="header-right">
+      <span class="text-sm text-secondary" id="last-analyzed">Not analyzed yet</span>
+      <button class="btn btn-secondary" id="btn-refresh" title="Re-analyze">↻ Refresh</button>
+    </div>
+  </header>
+
+  <!-- ── Main Content ── -->
+  <main class="main">
+
+    <!-- ▸ Dashboard View ── -->
+    <section class="view active" id="view-dashboard">
+      <div class="stats-grid" id="stats-grid">
+        <div class="stat-card stat-findings">
+          <div class="stat-icon">⚠</div>
+          <div class="stat-value" id="stat-findings">—</div>
+          <div class="stat-label">Findings</div>
+        </div>
+        <div class="stat-card stat-declared">
+          <div class="stat-icon">📋</div>
+          <div class="stat-value" id="stat-declared">—</div>
+          <div class="stat-label">Declared Deps</div>
+        </div>
+        <div class="stat-card stat-imported">
+          <div class="stat-icon">📥</div>
+          <div class="stat-value" id="stat-imported">—</div>
+          <div class="stat-label">Imported Modules</div>
+        </div>
+        <div class="stat-card stat-packages">
+          <div class="stat-icon">📚</div>
+          <div class="stat-value" id="stat-packages">—</div>
+          <div class="stat-label">Installed Packages</div>
+        </div>
+      </div>
+
+      <!-- Recent findings preview -->
+      <div class="card mb-6">
+        <div class="card-header">
+          <h3>Recent Findings</h3>
+          <button class="btn btn-ghost" data-view="findings" id="btn-view-all-findings">View All →</button>
+        </div>
+        <div class="card-body" id="dashboard-findings-preview">
+          <div class="empty-state">
+            <div class="icon">🔍</div>
+            <h3>No analysis yet</h3>
+            <p>Enter a project path in the sidebar and click ▶ to begin.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Environment summary -->
+      <div class="card">
+        <div class="card-header">
+          <h3>Environment Summary</h3>
+        </div>
+        <div class="card-body" id="dashboard-env-summary">
+          <div class="empty-state">
+            <div class="icon">🖥️</div>
+            <h3>No fingerprint loaded</h3>
+            <p>Analyze a project to capture the environment fingerprint.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ▸ Findings View ── -->
+    <section class="view" id="view-findings">
+      <div class="flex items-center gap-4 mb-6" style="justify-content:space-between;">
+        <div class="flex items-center gap-3">
+          <select class="input" id="filter-severity">
+            <option value="all">All Severities</option>
+            <option value="high">High</option>
+            <option value="medium">Medium</option>
+            <option value="low">Low</option>
+          </select>
+          <select class="input" id="filter-rule">
+            <option value="all">All Rules</option>
+            <option value="R1">R1 — Undeclared Import</option>
+            <option value="R2">R2 — Missing/Mismatch</option>
+            <option value="R3">R3 — Conflicting Pins</option>
+            <option value="R4">R4 — Python Incompat</option>
+            <option value="R7">R7 — Marker Evaluation</option>
+          </select>
+        </div>
+        <span class="text-sm text-secondary" id="findings-count">0 findings</span>
+      </div>
+      <div class="findings-list" id="findings-list">
+        <div class="empty-state">
+          <div class="icon">✅</div>
+          <h3>No findings</h3>
+          <p>Analyze a project to see diagnostic findings.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ▸ Scan View ── -->
+    <section class="view" id="view-scan">
+      <div class="card mb-6">
+        <div class="card-header">
+          <h3>Declared Dependencies</h3>
+        </div>
+        <div class="card-body" id="scan-declared">
+          <div class="empty-state">
+            <div class="icon">📦</div>
+            <h3>No scan data</h3>
+            <p>Analyze a project to see declared dependencies.</p>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header">
+          <h3>Imported Modules</h3>
+        </div>
+        <div class="card-body" id="scan-imported">
+          <div class="empty-state">
+            <div class="icon">📥</div>
+            <h3>No scan data</h3>
+            <p>Analyze a project to see imported modules.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ▸ Fingerprint View ── -->
+    <section class="view" id="view-fingerprint">
+      <div class="card">
+        <div class="card-header">
+          <h3>Environment Fingerprint</h3>
+          <button class="btn btn-secondary" id="btn-export-fp">⬇ Export JSON</button>
+        </div>
+        <div class="card-body" id="fingerprint-detail">
+          <div class="empty-state">
+            <div class="icon">🖥️</div>
+            <h3>No fingerprint</h3>
+            <p>Analyze a project to capture the environment.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ▸ Tools View ── -->
+    <section class="view" id="view-tools">
+      <div class="card">
+        <div class="card-header">
+          <h3>Native Tools</h3>
+        </div>
+        <div class="card-body" id="tools-list">
+          <div class="empty-state">
+            <div class="icon">🔧</div>
+            <h3>No tool data</h3>
+            <p>Analyze a project to detect native build tools.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ▸ Packages View ── -->
+    <section class="view" id="view-packages">
+      <div class="card">
+        <div class="card-header">
+          <h3>Installed Packages</h3>
+          <div class="input-inline">
+            <input type="text" class="input" id="pkg-search" placeholder="Search packages…" style="width:200px;">
+          </div>
+        </div>
+        <div class="card-body" style="padding:0;">
+          <div id="packages-table-container">
+            <div class="empty-state">
+              <div class="icon">📚</div>
+              <h3>No package data</h3>
+              <p>Analyze a project to see installed packages.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ▸ Resolve View ── -->
+    <section class="view" id="view-resolve">
+      <div class="card">
+        <div class="card-header">
+          <h3>Import → Distribution Resolver</h3>
+        </div>
+        <div class="card-body">
+          <div class="input-inline mb-4">
+            <input type="text" class="input" id="resolve-input" list="import-recommendations" placeholder="e.g. sklearn, cv2, PIL" style="flex:1;">
+            <datalist id="import-recommendations">
+              <option value="flask"></option>
+              <option value="django"></option>
+              <option value="fastapi"></option>
+              <option value="requests"></option>
+              <option value="numpy"></option>
+              <option value="pandas"></option>
+              <option value="matplotlib"></option>
+              <option value="scipy"></option>
+              <option value="sklearn"></option>
+              <option value="PIL"></option>
+              <option value="cv2"></option>
+              <option value="yaml"></option>
+              <option value="dotenv"></option>
+              <option value="sqlalchemy"></option>
+              <option value="pytest"></option>
+              <option value="PyQt5"></option>
+              <option value="PyQt6"></option>
+              <option value="PySide6"></option>
+              <option value="torch"></option>
+              <option value="tensorflow"></option>
+              <option value="keras"></option>
+              <option value="transformers"></option>
+              <option value="pydantic"></option>
+              <option value="bs4"></option>
+              <option value="jwt"></option>
+            </datalist>
+            <button class="btn btn-primary" id="btn-resolve">Resolve</button>
+          </div>
+          <div id="resolve-result">
+            <div class="empty-state" style="padding:var(--space-8);">
+              <div class="icon">🔗</div>
+              <h3>Enter an import name</h3>
+              <p>Type a Python import name and click Resolve to see which distribution provides it.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ▸ JSON View ── -->
+    <section class="view" id="view-json-viewer">
+      <div class="card">
+        <div class="card-header">
+          <h3>Raw Analysis Data</h3>
+          <div class="flex items-center gap-2">
+            <select class="input" id="json-source">
+              <option value="findings">Findings</option>
+              <option value="scan">Scan Data</option>
+              <option value="fingerprint">Fingerprint</option>
+            </select>
+            <button class="btn btn-secondary" id="btn-copy-json" title="Copy to clipboard">📋 Copy</button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="json-viewer" id="json-output">{}</div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- ▸ Manual Solve Modal ── -->
+<div id="manual-solve-modal" class="modal-overlay hidden">
+  <div class="modal">
+    <div class="modal-header">Manual Fix</div>
+    <div class="modal-body">
+      <p style="margin-bottom:var(--space-4); color:var(--text-secondary); font-size:0.9rem;">
+        Please specify the exact PyPI package name to use to fix this issue:
+      </p>
+      <input type="text" class="input w-full" id="manual-solve-input" placeholder="e.g. tomli">
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" id="manual-solve-cancel">Cancel</button>
+      <button class="btn btn-primary" id="manual-solve-ok">Apply Fix</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js?v=14"></script>
+</body>
+</html>

@@ -88,7 +88,7 @@ class Diagnoser:
             self._check_r1(imp_name, locs, Group.RUNTIME, manifest_pkgs)
             
         for imp_name, locs in self.imports.optional.items():
-            self._check_r1(imp_name, locs, Group.OPTIONAL, manifest_pkgs, force_low_conf=True)
+            self._check_r1(imp_name, locs, Group.OPTIONAL, manifest_pkgs)
 
     def _check_r1(self, imp_name: str, locs: list[Any], group: Group, manifest_pkgs: set[str], force_low_conf: bool = False) -> None:
         resolution = self.resolver.map_import_to_package(imp_name)
@@ -198,7 +198,10 @@ class Diagnoser:
                         pass # Ignore broken markers
                         
                 # R2 Check
-                installed_version = self.fingerprint.installed_packages.get(canon_pkg)
+                # Create a canonical map of installed packages
+                canonical_installed = {canonicalize_name(k): v for k, v in self.fingerprint.installed_packages.items()}
+                installed_version = canonical_installed.get(canon_pkg)
+                
                 if not installed_version:
                     self.findings.append(Finding(
                         rule_id="R2",
