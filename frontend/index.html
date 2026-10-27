@@ -357,6 +357,60 @@
   </div>
 </div>
 
-<script src="app.js?v=14"></script>
+<!-- ▸ Choose Folder Modal ── -->
+<div id="folder-picker-modal" class="modal-overlay hidden">
+  <div class="modal" style="max-width: 620px;">
+    <div class="modal-header" style="display:flex; justify-content:space-between; align-items:center;">
+      <span>Select Project Folder</span>
+      <button class="btn btn-ghost btn-icon" id="folder-picker-close" style="font-size:1rem; padding:4px 8px;">✕</button>
+    </div>
+    <div class="modal-body" style="display:flex; flex-direction:column; gap:var(--space-4);">
+      <div>
+        <label style="font-size:0.82rem; color:var(--text-secondary); margin-bottom:var(--space-1); display:block;">
+          Selected Path:
+        </label>
+        <div class="input-inline">
+          <input type="text" class="input w-full" id="folder-picker-path" placeholder="d:\my-project or ." value=".">
+          <button class="btn btn-primary" id="folder-picker-select-btn">Select & Analyze</button>
+        </div>
+      </div>
+
+      <!-- Quick test corpus projects -->
+      <div>
+        <div style="font-size:0.8rem; font-weight:700; color:var(--accent-blue); margin-bottom:var(--space-2); text-transform:uppercase; letter-spacing:0.05em;">
+          Sample Projects / Test Corpus
+        </div>
+        <div id="corpus-list" style="display:grid; grid-template-columns:1fr 1fr; gap:var(--space-2); max-height:140px; overflow-y:auto; padding-right:4px;">
+          <!-- Populated dynamically -->
+        </div>
+      </div>
+
+      <!-- Interactive Directory Browser -->
+      <div>
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:var(--space-1);">
+          <span style="font-size:0.8rem; font-weight:700; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.05em;">
+            Browse Subdirectories
+          </span>
+          <div id="drive-selector" style="display:flex; gap:var(--space-1);"></div>
+        </div>
+        <div style="background:var(--bg-card); border:1px solid var(--border-card); border-radius:var(--radius-md); padding:var(--space-2); max-height:160px; overflow-y:auto;">
+          <div id="dir-browser-parent" style="margin-bottom:var(--space-1);"></div>
+          <div id="dir-browser-list" style="display:flex; flex-direction:column; gap:2px;"></div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer" style="display:flex; justify-content:space-between; align-items:center;">
+      <button class="btn btn-secondary" id="folder-picker-native-btn" title="Try opening Windows native dialog">
+        🖥️ Open Windows Dialog
+      </button>
+      <div class="flex gap-2">
+        <button class="btn btn-secondary" id="folder-picker-cancel">Cancel</button>
+        <button class="btn btn-primary" id="folder-picker-confirm">Done</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="app.js?v=15"></script>
 </body>
 </html>

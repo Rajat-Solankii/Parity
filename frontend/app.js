@@ -938,21 +938,141 @@ function esc(str) {
   return div.innerHTML;
 }
 
-// ─── Browse Folder ───
-async function browseFolder() {
+// ─── Browse Folder (In-App Modal & Directory Explorer) ───
+const folderModal = $('#folder-picker-modal');
+let currentBrowserPath = '.';
+
+async function openFolderPickerModal() {
+  currentBrowserPath = $('#project-path').value.trim() || '.';
+  $('#folder-picker-path').value = currentBrowserPath;
+  folderModal.classList.remove('hidden');
+  await loadBrowseDirs(currentBrowserPath);
+}
+
+function closeFolderPickerModal() {
+  folderModal.classList.add('hidden');
+}
+
+async function loadBrowseDirs(targetPath) {
+  const listEl = $('#dir-browser-list');
+  const parentEl = $('#dir-browser-parent');
+  const drivesEl = $('#drive-selector');
+  const corpusEl = $('#corpus-list');
+
+  listEl.innerHTML = '<div style="color:var(--text-secondary); font-size:0.8rem; padding:4px;">Loading folders…</div>';
+
   try {
-    const data = await apiCall('/browse', { method: 'POST' });
-    if (data.path) {
-      $('#project-path').value = data.path;
-      showToast('Folder selected: ' + data.path, 'success');
+    const res = await apiCall(`/browse-dirs?path=${encodeURIComponent(targetPath)}`);
+    currentBrowserPath = res.current || targetPath;
+    $('#folder-picker-path').value = currentBrowserPath;
+
+    // 1. Render Drives
+    if (res.drives && res.drives.length > 0) {
+      drivesEl.innerHTML = res.drives.map((d) => `
+        <button class="btn btn-secondary" style="padding:2px 8px; font-size:0.75rem;" onclick="navigateToFolder('${esc(d).replace(/\\/g, '\\\\')}')">${esc(d)}</button>
+      `).join('');
+    } else {
+      drivesEl.innerHTML = '';
+    }
+
+    // 2. Render Parent navigation
+    if (res.parent) {
+      parentEl.innerHTML = `
+        <button class="btn btn-ghost" style="padding:3px 8px; font-size:0.8rem; width:100%; text-align:left; display:flex; align-items:center; gap:6px; color:var(--accent-blue);" onclick="navigateToFolder('${esc(res.parent).replace(/\\/g, '\\\\')}')">
+          <span>⬆</span> <span>.. (Up to ${esc(res.parent)})</span>
+        </button>
+      `;
+    } else {
+      parentEl.innerHTML = '';
+    }
+
+    // 3. Render Subdirectories
+    if (res.dirs && res.dirs.length > 0) {
+      listEl.innerHTML = res.dirs.map((dirName) => {
+        const full = (currentBrowserPath.endsWith('\\') || currentBrowserPath.endsWith('/'))
+          ? currentBrowserPath + dirName
+          : currentBrowserPath + '\\' + dirName;
+        return `
+          <div style="display:flex; justify-content:space-between; align-items:center; padding:3px 6px; border-radius:4px; font-size:0.82rem; hover:background:rgba(255,255,255,0.05);" onmouseover="this.style.background='rgba(255,255,255,0.05)'" onmouseout="this.style.background='transparent'">
+            <span style="cursor:pointer; display:flex; align-items:center; gap:6px; flex:1;" onclick="navigateToFolder('${esc(full).replace(/\\/g, '\\\\')}')">
+              <span>📁</span> <span>${esc(dirName)}</span>
+            </span>
+            <button class="btn btn-ghost" style="padding:2px 6px; font-size:0.72rem;" onclick="selectAndCloseFolder('${esc(full).replace(/\\/g, '\\\\')}')">Select</button>
+          </div>
+        `;
+      }).join('');
+    } else {
+      listEl.innerHTML = '<div style="color:var(--text-secondary); font-size:0.78rem; padding:4px;">No subdirectories found.</div>';
+    }
+
+    // 4. Render Sample Corpus
+    if (res.corpus && res.corpus.length > 0) {
+      corpusEl.innerHTML = res.corpus.map((c) => `
+        <button class="btn btn-secondary" style="padding:4px 8px; font-size:0.75rem; text-align:left; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${esc(c.path)}" onclick="selectAndCloseFolder('${esc(c.path).replace(/\\/g, '\\\\')}')">
+          📁 ${esc(c.name)}
+        </button>
+      `).join('');
+    } else {
+      corpusEl.innerHTML = '<div style="color:var(--text-secondary); font-size:0.75rem;">(Not inside Parity root)</div>';
     }
   } catch (err) {
-    showToast(err.message, 'error');
+    listEl.innerHTML = `<div style="color:var(--accent-rose); font-size:0.8rem; padding:4px;">Error: ${esc(err.message)}</div>`;
   }
 }
 
+window.navigateToFolder = async function (newPath) {
+  await loadBrowseDirs(newPath);
+};
+
+window.selectAndCloseFolder = function (chosenPath) {
+  $('#project-path').value = chosenPath;
+  closeFolderPickerModal();
+  showToast('Selected: ' + chosenPath, 'success');
+  analyzeProject();
+};
+
+// Wire modal buttons
+$('#btn-browse').addEventListener('click', openFolderPickerModal);
+$('#folder-picker-close').addEventListener('click', closeFolderPickerModal);
+$('#folder-picker-cancel').addEventListener('click', closeFolderPickerModal);
+
+$('#folder-picker-select-btn').addEventListener('click', () => {
+  const p = $('#folder-picker-path').value.trim();
+  if (p) {
+    selectAndCloseFolder(p);
+  }
+});
+
+$('#folder-picker-confirm').addEventListener('click', () => {
+  const p = $('#folder-picker-path').value.trim();
+  if (p) {
+    selectAndCloseFolder(p);
+  }
+});
+
+$('#folder-picker-path').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    const p = $('#folder-picker-path').value.trim();
+    if (p) {
+      loadBrowseDirs(p);
+    }
+  }
+});
+
+// Optional Native Windows Dialog Button
+$('#folder-picker-native-btn').addEventListener('click', async () => {
+  showToast('Launching Windows dialog… check taskbar if needed.', 'info');
+  try {
+    const data = await apiCall('/browse', { method: 'POST' });
+    if (data.path) {
+      selectAndCloseFolder(data.path);
+    }
+  } catch (err) {
+    showToast('Native dialog error: ' + err.message, 'error');
+  }
+});
+
 // ─── Event Bindings ───
-$('#btn-browse').addEventListener('click', browseFolder);
 $('#btn-analyze').addEventListener('click', analyzeProject);
 $('#btn-refresh').addEventListener('click', analyzeProject);
 $('#btn-resolve').addEventListener('click', () => resolveImport(false));

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
 import sys
 from enum import Enum
 from pathlib import Path
@@ -177,33 +178,129 @@ def api_resolve() -> Any:
     return jsonify({"candidates": candidates})
 
 
+# ─── API: Browse Directories (In-App Directory Explorer) ───
+@app.route("/api/browse-dirs", methods=["GET", "POST"])
+def api_browse_dirs() -> Any:
+    """List subdirectories of a given path for the in-app folder picker."""
+    data = request.get_json(silent=True) or {}
+    req_path = request.args.get("path") or data.get("path") or "."
+
+    try:
+        target = Path(req_path).resolve()
+        if not target.is_dir():
+            target = target.parent
+        if not target.is_dir():
+            target = PROJECT_ROOT
+
+        subdirs: list[str] = []
+        try:
+            for entry in sorted(target.iterdir(), key=lambda p: p.name.lower()):
+                if entry.is_dir() and not entry.name.startswith("."):
+                    subdirs.append(entry.name)
+        except PermissionError:
+            pass
+
+        drives: list[str] = []
+        if sys.platform == "win32":
+            import string
+            for letter in string.ascii_uppercase:
+                drive_path = f"{letter}:\\"
+                if os.path.exists(drive_path):
+                    drives.append(drive_path)
+
+        parent_path = str(target.parent) if target.parent != target else ""
+
+        # Also get list of test corpus directories if inside project
+        corpus_dirs: list[dict[str, str]] = []
+        corpus_path = PROJECT_ROOT / "tests" / "corpus"
+        if corpus_path.is_dir():
+            for p in sorted(corpus_path.glob("*")):
+                if p.is_dir():
+                    corpus_dirs.append({
+                        "name": p.name,
+                        "path": str(p),
+                        "rel": str(p.relative_to(PROJECT_ROOT))
+                    })
+
+        return jsonify({
+            "current": str(target),
+            "parent": parent_path,
+            "dirs": subdirs,
+            "drives": drives,
+            "corpus": corpus_dirs,
+        })
+    except Exception as e:
+        return jsonify({
+            "error": str(e),
+            "current": str(PROJECT_ROOT),
+            "parent": "",
+            "dirs": [],
+            "drives": [],
+            "corpus": [],
+        })
+
+
 # ─── API: Browse (native folder dialog) ───
 @app.route("/api/browse", methods=["POST"])
 def api_browse() -> Any:
-    import threading
+    import subprocess
 
-    result: dict[str, str] = {}
+    # On Windows, try PowerShell with TopMost form first so it pops above Chrome
+    if sys.platform == "win32":
+        try:
+            ps_code = (
+                "Add-Type -AssemblyName System.Windows.Forms; "
+                "$form = New-Object System.Windows.Forms.Form; "
+                "$form.TopMost = $true; "
+                "$form.Opacity = 0; "
+                "$form.Show(); "
+                "$dialog = New-Object System.Windows.Forms.FolderBrowserDialog; "
+                "$dialog.Description = 'Select Python Project Folder'; "
+                "if ($dialog.ShowDialog($form) -eq [System.Windows.Forms.DialogResult]::OK) { "
+                "Write-Host $dialog.SelectedPath "
+                "}; "
+                "$form.Close()"
+            )
+            ps_proc = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", ps_code],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            selected = ps_proc.stdout.strip()
+            if selected:
+                return jsonify({"path": os.path.normpath(selected)})
+        except Exception:
+            pass
 
-    def pick_folder() -> None:
-        import tkinter as tk
-        from tkinter import filedialog
+    # Fallback to Tkinter subprocess
+    tk_code = (
+        "import tkinter as tk; "
+        "from tkinter import filedialog; "
+        "r = tk.Tk(); "
+        "r.withdraw(); "
+        "r.wm_attributes('-topmost', 1); "
+        "r.update(); "
+        "f = filedialog.askdirectory(parent=r, title='Select Python Project Folder'); "
+        "r.destroy(); "
+        "if f: print(f)"
+    )
 
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes("-topmost", True)
-        folder = filedialog.askdirectory(title="Select Project Folder")
-        root.destroy()
-        if folder:
-            result["path"] = folder
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", tk_code],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        selected = proc.stdout.strip()
+        if selected:
+            return jsonify({"path": os.path.normpath(selected)})
+    except Exception:
+        pass
 
-    # tkinter must run on its own thread to avoid blocking Flask
-    t = threading.Thread(target=pick_folder)
-    t.start()
-    t.join(timeout=120)  # 2 min max wait
-
-    if "path" in result:
-        return jsonify({"path": result["path"]})
     return jsonify({"path": ""})
+
 
 
 # ─── API: Uninstall Package ───
