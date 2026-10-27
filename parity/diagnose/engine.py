@@ -88,7 +88,7 @@ class Diagnoser:
             self._check_r1(imp_name, locs, Group.RUNTIME, manifest_pkgs)
             
         for imp_name, locs in self.imports.optional.items():
-            self._check_r1(imp_name, locs, Group.OPTIONAL, manifest_pkgs)
+            self._check_r1(imp_name, locs, Group.OPTIONAL, manifest_pkgs, force_low_conf=True)
 
     def _check_r1(self, imp_name: str, locs: list[Any], group: Group, manifest_pkgs: set[str], force_low_conf: bool = False) -> None:
         resolution = self.resolver.map_import_to_package(imp_name)
